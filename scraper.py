@@ -82,7 +82,7 @@ def scrape_channel_details(channel_video_pairs):
     opts = Options()
     opts.add_argument("--disable-blink-features=AutomationControlled")
     opts.add_argument("--start-maximized")
-    opts.add_argument("--headless")
+    # opts.add_argument("--headless")
     driver = webdriver.Chrome(options=opts)
 
     results = []
@@ -109,16 +109,40 @@ def scrape_channel_details(channel_video_pairs):
                 except TimeoutException:
                     logger.info("No accept cookies button found.")
 
-            # Expand description if available
+            # --------------------- Sign in to Gmail --------------------- #
             try:
-                expand_button = WebDriverWait(driver, 5).until(
+                sign_in_button = WebDriverWait(driver, 5).until(
+                    EC.element_to_be_clickable((By.XPATH,
+                                                '//*[@id="buttons"]/ytd-button-renderer/yt-button-shape/a')))
+                sign_in_button.click()
+                logger.info("Clicked sign in button")
+            except TimeoutException:
+                logger.info("No sign in button found.")
+
+            email_field = WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, '//*[@id="identifierId"]')))
+            email_field.click()
+            email_field.send_keys("franecalusic94@gmail.com")
+
+            next_button = WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, '//*[@id="identifierNext"]/div/button')))
+            next_button.click()
+
+            password_field = WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, '//*[@id="password"]/div[1]/div/div[1]/input')))
+            password_field.click()
+            password_field.send_keys("ZekoslavMrkvicaInes")
+
+            next_button_2 = WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, '//*[@id="passwordNext"]/div/button')))
+            next_button_2.click()
+
+            # --------------------- Expand description if available --------------------- #
+            try:
+                expand_button = WebDriverWait(driver, 15).until(
                     EC.element_to_be_clickable((By.XPATH,'//*[@id="page-header"]/yt-page-header-renderer/yt-page-header-view-model/div/div[1]/div/yt-description-preview-view-model/truncated-text/button'))
                 )
                 expand_button.click()
             except TimeoutException:
                 logger.info(f"No expand button for {channel_url}")
 
-            # Get country
+            # --------------------- Country --------------------- #
             try:
                 country_element = WebDriverWait(driver, 5).until(
                     EC.visibility_of_element_located((By.CSS_SELECTOR,'tr.description-item:has(yt-icon[icon="privacy_public"]) td:nth-of-type(2)'))
@@ -128,8 +152,71 @@ def scrape_channel_details(channel_video_pairs):
                 logger.warning(f"Country not found for {channel_url}")
                 country = "N/A"
 
-            results.append((channel_url, country, videos))
-            logger.info(f"Scraped {channel_url} -> {country}, {len(videos)} videos")
+            # --------------------- Joined youtube since --------------------- #
+            try:
+                joined_youtube_element = WebDriverWait(driver, 5).until(
+                    EC.visibility_of_element_located((By.CSS_SELECTOR,
+                                                      'tr.description-item:has(yt-icon[icon="info_outline"]) td:nth-of-type(2)'))
+                )
+                joined_youtube = joined_youtube_element.text
+            except TimeoutException:
+                logger.warning(f"Country not found for {channel_url}")
+                joined_youtube = "N/A"
+
+            # --------------------- No of subscribers ---------------------#
+            try:
+                subscribers_element = WebDriverWait(driver, 5).until(
+                    EC.visibility_of_element_located(
+                        (By.CSS_SELECTOR,
+                         'tr.description-item:has(yt-icon[icon="person_radar"]) td:nth-of-type(2)'))
+                )
+                subscribers = subscribers_element.text
+            except TimeoutException:
+                logger.warning(f"Country not found for {channel_url}")
+                subscribers = "N/A"
+
+            # --------------------- No of videos --------------------- #
+            try:
+                videos_element = WebDriverWait(driver, 5).until(
+                    EC.visibility_of_element_located(
+                        (By.CSS_SELECTOR,
+                         'tr.description-item:has(yt-icon[icon="my_videos"]) td:nth-of-type(2)'))
+                )
+                number_of_videos = videos_element.text
+            except TimeoutException:
+                logger.warning(f"Country not found for {channel_url}")
+                number_of_videos = "N/A"
+
+            # --------------------- No of views --------------------- #
+            try:
+                views_element = WebDriverWait(driver, 5).until(
+                    EC.visibility_of_element_located(
+                        (By.CSS_SELECTOR,
+                         'tr.description-item:has(yt-icon[icon="trending_up"]) td:nth-of-type(2)'))
+                )
+                views = views_element.text
+            except TimeoutException:
+                logger.warning(f"Country not found for {channel_url}")
+                views = "N/A"
+
+            # --------------------- Email extraction --------------------- #
+            try:
+                view_email_button = WebDriverWait(driver, 10).until(
+                    EC.element_to_be_clickable((By.XPATH,
+                                                '//*[@id="view-email-button-container"]/yt-button-view-model/button-view-model/button'))
+                )
+                view_email_button.click()
+                logger.info("Clicked view email button")
+            except TimeoutException:
+                logger.info("No view email button found")
+
+            # Captcha solving logic goes here
+
+            time.sleep(500)
+
+            results.append((channel_url, country, joined_youtube, subscribers, number_of_videos, views, videos))
+            logger.info(f"Scraped {channel_url} -> {country} -> {joined_youtube} -> {subscribers} -> {number_of_videos} -> {views}, {len(videos)} videos")
+
 
         except WebDriverException as e:
             logger.error(f"Error scraping {channel_url}: {e}")
@@ -141,9 +228,9 @@ def scrape_channel_details(channel_video_pairs):
 def save_to_csv(filename, data):
     with open(filename, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["channel_url", "country", "video_urls"])
-        for channel, country, videos in data:
-            writer.writerow([channel, country] + videos)
+        writer.writerow(["channel_url", "country", "joined youtube since", "subscribers", "number_of_videos", "views", "video_urls"])
+        for channel, country, joined_youtube, subscribers, number_of_videos, views, videos in data:
+            writer.writerow([channel, country, joined_youtube, subscribers, number_of_videos, views] + videos)
     logger.info(f"Saved data to {filename}")
 
 if __name__ == "__main__":

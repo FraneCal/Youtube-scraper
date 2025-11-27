@@ -9,6 +9,9 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, WebDriverException
+import requests
+
+CAPSOLVER_API_KEY = "YOUR CAPSOLVER API KEY GOES HERE"
 
 # Setup rotating logs
 log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
@@ -27,6 +30,34 @@ def save_screenshot(driver, name="error"):
     filename = f"screenshots/{name}_{timestamp}.png"
     driver.save_screenshot(filename)
     logger.info(f"Screenshot saved: {filename}")
+
+def solve_recaptcha_v2(website_url, site_key):
+    """Use CapSolver to get a gRecaptchaResponse token for reCAPTCHA v2."""
+    create_payload = {
+        "clientKey": CAPSOLVER_API_KEY,
+        "task": {
+            "type": "ReCaptchaV2TaskProxyLess",
+            "websiteURL": website_url,
+            "websiteKey": site_key,
+        }
+    }
+    r = requests.post("https://api.capsolver.com/createTask", json=create_payload)
+    j = r.json()
+    task_id = j.get("taskId")
+    if not task_id:
+        raise RuntimeError(f"Failed to create task: {j}")
+
+    while True:
+        time.sleep(1)
+        res = requests.post(
+            "https://api.capsolver.com/getTaskResult",
+            json={"clientKey": CAPSOLVER_API_KEY, "taskId": task_id},
+        )
+        data = res.json()
+        if data.get("status") == "ready":
+            return data["solution"]["gRecaptchaResponse"]
+        if data.get("status") == "failed" or data.get("errorId"):
+            raise RuntimeError(f"Solving failed: {data}")
 
 def scrape_youtube_links(url):
     opts = Options()
@@ -87,6 +118,7 @@ def scrape_channel_details(channel_video_pairs):
 
     results = []
     accept_cookies_done = False
+    signed_in = False  # NEW: track Gmail sign-in
 
     # Group videos by channel
     channel_dict = {}
@@ -109,29 +141,37 @@ def scrape_channel_details(channel_video_pairs):
                 except TimeoutException:
                     logger.info("No accept cookies button found.")
 
-            # --------------------- Sign in to Gmail --------------------- #
-            try:
-                sign_in_button = WebDriverWait(driver, 5).until(
-                    EC.element_to_be_clickable((By.XPATH,
-                                                '//*[@id="buttons"]/ytd-button-renderer/yt-button-shape/a')))
-                sign_in_button.click()
-                logger.info("Clicked sign in button")
-            except TimeoutException:
-                logger.info("No sign in button found.")
+            # --------------------- Sign in to Gmail (only once) --------------------- #
+            if not signed_in:
+                try:
+                    sign_in_button = WebDriverWait(driver, 5).until(
+                        EC.element_to_be_clickable((By.XPATH,
+                                                    '//*[@id="buttons"]/ytd-button-renderer/yt-button-shape/a')))
+                    sign_in_button.click()
+                    logger.info("Clicked sign in button")
+                except TimeoutException:
+                    logger.info("No sign in button found.")
 
-            email_field = WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, '//*[@id="identifierId"]')))
-            email_field.click()
-            email_field.send_keys("franecalusic94@gmail.com")
+                email_field = WebDriverWait(driver, 5).until(
+                    EC.element_to_be_clickable((By.XPATH, '//*[@id="identifierId"]')))
+                email_field.click()
+                email_field.send_keys("franecalusic94@gmail.com")
 
-            next_button = WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, '//*[@id="identifierNext"]/div/button')))
-            next_button.click()
+                next_button = WebDriverWait(driver, 5).until(
+                    EC.element_to_be_clickable((By.XPATH, '//*[@id="identifierNext"]/div/button')))
+                next_button.click()
 
-            password_field = WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, '//*[@id="password"]/div[1]/div/div[1]/input')))
-            password_field.click()
-            password_field.send_keys("ZekoslavMrkvicaInes")
+                password_field = WebDriverWait(driver, 5).until(
+                    EC.element_to_be_clickable((By.XPATH, '//*[@id="password"]/div[1]/div/div[1]/input')))
+                password_field.click()
+                password_field.send_keys("ZekoslavMrkvicaInes")
 
-            next_button_2 = WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, '//*[@id="passwordNext"]/div/button')))
-            next_button_2.click()
+                next_button_2 = WebDriverWait(driver, 5).until(
+                    EC.element_to_be_clickable((By.XPATH, '//*[@id="passwordNext"]/div/button')))
+                next_button_2.click()
+
+                signed_in = True
+                logger.info("Signed in to Gmail once")
 
             # --------------------- Expand description if available --------------------- #
             try:
@@ -210,13 +250,58 @@ def scrape_channel_details(channel_video_pairs):
             except TimeoutException:
                 logger.info("No view email button found")
 
-            # Captcha solving logic goes here
+            # Captcha solving logic
+            try:
+                time.sleep(2)
+                iframes = driver.find_elements(By.TAG_NAME, "iframe")
+                logger.info(f"Found {len(iframes)} iframes after clicking email button")
 
-            time.sleep(500)
+                WebDriverWait(driver, 20).until(
+                    EC.frame_to_be_available_and_switch_to_it(
+                        (By.CSS_SELECTOR, "iframe[src*='recaptcha']")
+                    )
+                )
+                logger.info("Switched into recaptcha iframe")
 
-            results.append((channel_url, country, joined_youtube, subscribers, number_of_videos, views, videos))
-            logger.info(f"Scraped {channel_url} -> {country} -> {joined_youtube} -> {subscribers} -> {number_of_videos} -> {views}, {len(videos)} videos")
+                token = solve_recaptcha_v2(
+                    channel_url,
+                    "6Lf39AMTAAAAALPbLZdcrWDa8Ygmgk_fmGmrlRog"
+                )
 
+                driver.switch_to.default_content()
+                logger.info("Back to default content, injecting token")
+
+                driver.execute_script("""
+                    var t = document.getElementById('g-recaptcha-response');
+                    if (!t) {
+                        t = document.createElement('textarea');
+                        t.id = 'g-recaptcha-response';
+                        t.name = 'g-recaptcha-response';
+                        t.style.display = 'none';
+                        document.body.appendChild(t);
+                    }
+                    t.value = arguments[0];
+                """, token)
+
+                submit_btn = WebDriverWait(driver, 10).until(
+                    EC.element_to_be_clickable((By.ID, "submit-btn"))
+                )
+                submit_btn.click()
+                logger.info("Clicked submit-btn with captcha token")
+            except Exception as e:
+                logger.warning(f"Captcha handling failed for {channel_url}: {repr(e)}")
+
+            # Email extraction
+            try:
+                email_element = WebDriverWait(driver, 5).until(
+                    EC.visibility_of_element_located((By.ID,'email')))
+                email = email_element.text
+            except TimeoutException:
+                logger.warning(f"Email not found for {channel_url}")
+                email = "N/A"
+
+            results.append((channel_url, country, joined_youtube, subscribers, number_of_videos, views, email, videos))
+            logger.info(f"Scraped {channel_url} -> {country} -> {joined_youtube} -> {subscribers} -> {number_of_videos} -> {views} -> {email}, {len(videos)} videos")
 
         except WebDriverException as e:
             logger.error(f"Error scraping {channel_url}: {e}")
@@ -228,9 +313,9 @@ def scrape_channel_details(channel_video_pairs):
 def save_to_csv(filename, data):
     with open(filename, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["channel_url", "country", "joined youtube since", "subscribers", "number_of_videos", "views", "video_urls"])
-        for channel, country, joined_youtube, subscribers, number_of_videos, views, videos in data:
-            writer.writerow([channel, country, joined_youtube, subscribers, number_of_videos, views] + videos)
+        writer.writerow(["channel_url", "country", "joined youtube since", "subscribers", "number_of_videos", "views", "email", "video_urls"])
+        for channel, country, joined_youtube, subscribers, number_of_videos, views, email, videos in data:
+            writer.writerow([channel, country, joined_youtube, subscribers, number_of_videos, views, email] + videos)
     logger.info(f"Saved data to {filename}")
 
 if __name__ == "__main__":
